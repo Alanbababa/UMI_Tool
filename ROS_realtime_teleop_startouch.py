@@ -22,9 +22,12 @@ Startouch 单臂实时遥操作（ROS topic 数据源）
 
 import argparse
 import os
+import select
 import sys
+import termios
 import threading
 import time
+import tty
 
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
@@ -343,6 +346,38 @@ class LatestRosState:
             }
 
 
+class KeyboardExitWatcher:
+    """终端非阻塞按键监听；按 s/S 请求回 home 并退出。"""
+
+    def __init__(self, exit_key="s"):
+        self.exit_key = exit_key.lower()
+        self.fd = None
+        self.old_settings = None
+        self.active = False
+
+    def __enter__(self):
+        if sys.stdin.isatty():
+            self.fd = sys.stdin.fileno()
+            self.old_settings = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+            self.active = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.active and self.old_settings is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+        self.active = False
+
+    def pressed_exit(self):
+        if not self.active:
+            return False
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        if not ready:
+            return False
+        key = sys.stdin.read(1)
+        return key.lower() == self.exit_key
+
+
 def resolve_topic_class(rospy, rostopic, topic, timeout):
     """等待 publisher 出现并解析 topic 消息类型。"""
     start = time.time()
@@ -546,9 +581,17 @@ def main():
     last_gripper_cmd = None
     last_gripper_send_time = 0.0
 
-    print("开始实时遥操作。Ctrl-C 退出。")
+    print("开始实时遥操作。按 s 回 base_pose 并退出；Ctrl-C 直接退出。")
+    reset_and_exit = False
+    key_watcher = KeyboardExitWatcher()
+    key_watcher.__enter__()
     try:
         while not rospy.is_shutdown():
+            if key_watcher.pressed_exit():
+                print("收到按键 s，准备回 base_pose 并退出。")
+                reset_and_exit = True
+                break
+
             now = time.time()
             snap = state.snapshot()
             pose_qpos = snap["pose_qpos"]
@@ -650,9 +693,10 @@ def main():
 
             rate.sleep()
     finally:
+        key_watcher.__exit__(None, None, None)
         if arm is not None:
             try:
-                if args.return_home:
+                if reset_and_exit or args.return_home:
                     print("退出，回 base_pose...")
                     arm.set_end_effector_pose_euler(
                         pos=home_pos,
