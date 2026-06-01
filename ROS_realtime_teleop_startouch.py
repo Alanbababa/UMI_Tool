@@ -461,11 +461,11 @@ def parse_args():
                         help="ROS 节点名")
     parser.add_argument("--topic_wait_timeout", type=float, default=10.0,
                         help="等待 topic publisher 的超时时间；<=0 表示一直等待")
-    parser.add_argument("--rate", type=float, default=30.0,
+    parser.add_argument("--rate", type=float, default=100.0,
                         help="机械臂位姿发送频率 Hz")
     parser.add_argument("--log_period", type=float, default=1.0,
                         help="状态日志周期，秒")
-    parser.add_argument("--min_confidence", type=float, default=0.5,
+    parser.add_argument("--min_confidence", type=float, default=0.1,
                         help="pose 消息 confidence 低于该值时丢弃；无 confidence 字段则不检查")
     parser.add_argument("--max_pose_age", type=float, default=0.5,
                         help="最新 pose 超过该秒数未更新时暂停发送")
@@ -530,8 +530,8 @@ def parse_args():
 
     parser.add_argument("--no_gripper", action="store_true",
                         help="不订阅/发送夹爪")
-    parser.add_argument("--gripper_open_val", type=float, default=88.0,
-                        help="ROS 夹爪读数对应完全打开，默认 88")
+    parser.add_argument("--gripper_open_val", type=float, default=84.0,
+                        help="ROS 夹爪读数对应完全打开，默认 84")
     parser.add_argument("--gripper_closed_val", type=float, default=0.0,
                         help="ROS 夹爪读数对应完全闭合，默认 0")
     parser.add_argument("--invert_gripper", action="store_true",
