@@ -16,8 +16,7 @@ Startouch 单臂实时遥操作（ROS topic 数据源）
 默认流程：
 1. 读取 SLAM 位姿 [x, y, z, qx, qy, qz, qw]
 2. 按 XV2Gripper 进行坐标系和夹爪安装偏移转换
-3. 第一帧自动定零，机械臂从 --base_pose 开始跟随相对运动
-   默认用世界系 delta：位置直接相减，姿态用 R_current @ R_zero.T
+3. 默认按 replay 逻辑直接转换到机械臂坐标；也可用 --relative 第一帧定零
 4. 高频循环发送末端位姿，低频/死区发送夹爪
 """
 
@@ -491,10 +490,11 @@ def parse_args():
                         help="退出时回到 base_pose")
 
     mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--relative", dest="relative", action="store_true", default=True,
-                            help="第一帧定零，从 base_pose 开始跟随相对运动（默认）")
+    mode_group.add_argument("--relative", dest="relative", action="store_true",
+                            help="第一帧定零，从 base_pose 开始跟随相对运动")
     mode_group.add_argument("--absolute", dest="relative", action="store_false",
-                            help="不定零，按 replay 逻辑直接 base_pose + 当前 SLAM 位姿")
+                            help="不定零，按 replay 逻辑直接 base_pose + 当前 SLAM 位姿（默认）")
+    parser.set_defaults(relative=False)
     parser.add_argument(
         "--relative_frame",
         choices=("world", "local"),
