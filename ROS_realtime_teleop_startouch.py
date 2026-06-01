@@ -17,6 +17,7 @@ Startouch 单臂实时遥操作（ROS topic 数据源）
 1. 读取 SLAM 位姿 [x, y, z, qx, qy, qz, qw]
 2. 按 XV2Gripper 进行坐标系和夹爪安装偏移转换
 3. 第一帧自动定零，机械臂从 --base_pose 开始跟随相对运动
+   默认用世界系 delta：位置直接相减，姿态用 R_current @ R_zero.T
 4. 高频循环发送末端位姿，低频/死区发送夹爪
 """
 
@@ -149,6 +150,22 @@ def scale_delta_matrix(T_delta, position_scale, rotation_scale):
     rotvec = Rotation.from_matrix(T_delta[:3, :3]).as_rotvec()
     T_scaled[:3, :3] = Rotation.from_rotvec(rotvec * rotation_scale).as_matrix()
     return T_scaled
+
+
+def build_relative_delta(source_zero_T, source_T, relative_frame):
+    """
+    构建第一帧定零后的相对位姿。
+
+    world: 平移保持在 SLAM/XV2Gripper 输出坐标系中，姿态为世界系相对旋转。
+    local: 旧行为，使用 inv(T0) @ T，把平移量表达在第一帧局部坐标中。
+    """
+    if relative_frame == "local":
+        return np.linalg.inv(source_zero_T) @ source_T
+
+    T_delta = np.eye(4)
+    T_delta[:3, 3] = source_T[:3, 3] - source_zero_T[:3, 3]
+    T_delta[:3, :3] = source_T[:3, :3] @ source_zero_T[:3, :3].T
+    return T_delta
 
 
 def blend_matrices(previous_T, target_T, alpha):
@@ -464,6 +481,12 @@ def parse_args():
                             help="第一帧定零，从 base_pose 开始跟随相对运动（默认）")
     mode_group.add_argument("--absolute", dest="relative", action="store_false",
                             help="不定零，按 replay 逻辑直接 base_pose + 当前 SLAM 位姿")
+    parser.add_argument(
+        "--relative_frame",
+        choices=("world", "local"),
+        default="world",
+        help="相对模式 delta 坐标系：world=位置直接相减/世界系相对姿态（默认）；local=旧的 inv(T0)@T",
+    )
 
     parser.add_argument("--no_xv2gripper", action="store_true",
                         help="不执行 XV2Gripper 坐标变换")
@@ -556,9 +579,12 @@ def main():
     print(
         "模式: "
         f"{'relative 第一帧定零' if args.relative else 'absolute 绝对位姿'}; "
+        f"relative_frame={args.relative_frame if args.relative else 'n/a'}; "
         f"XV2Gripper={'on' if not args.no_xv2gripper else 'off'}; "
         f"dry_run={args.dry_run}"
     )
+    if args.relative:
+        print("relative 模式会减掉第一帧绝对 SLAM 位置；需要直接跟随处理后的 slam/pose 时请用 --absolute。")
 
     arm = None
     if not args.dry_run:
@@ -629,7 +655,11 @@ def main():
                         f"stamp={snap['pose_stamp']}, "
                         f"qpos={[round(v, 6) for v in source_qpos.tolist()]}"
                     )
-                T_delta = np.linalg.inv(source_zero_T) @ qpos2mat(source_qpos)
+                T_delta = build_relative_delta(
+                    source_zero_T,
+                    qpos2mat(source_qpos),
+                    relative_frame=args.relative_frame,
+                )
                 T_delta = scale_delta_matrix(
                     T_delta,
                     position_scale=args.position_scale,
