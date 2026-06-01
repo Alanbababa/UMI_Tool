@@ -4,9 +4,9 @@ Startouch 单臂实时遥操作（ROS topic 数据源）
 =========================================
 
 订阅本机 ROS1 topic：
-- /xv_sdk/250801DR48FP25002352/slam/pose
+- /xv_sdk/250801DR48FP26003233/slam/pose
   支持示例中的自定义消息结构：confidence + poseMsg.pose
-- /xv_sdk/250801DR48FP25002352/clamp/Data
+- /xv_sdk/250801DR48FP26003233/clamp/Data
   支持示例中的 data 字段，默认把 0~88 映射到 Startouch 夹爪 raw 值 0~1
 
 控制端沿用 replay 脚本里的 Startouch _raw 透传接口：
@@ -57,8 +57,8 @@ except Exception as exc:  # pragma: no cover - 依赖实际机器人 SDK 环境
         return Rotation.from_quat(q_xyzw).as_euler("xyz", degrees=False)
 
 
-DEFAULT_POSE_TOPIC = "/xv_sdk/250801DR48FP25002352/slam/pose"
-DEFAULT_CLAMP_TOPIC = "/xv_sdk/250801DR48FP25002352/clamp/Data"
+DEFAULT_POSE_TOPIC = "/xv_sdk/250801DR48FP26003233/slam/pose"
+DEFAULT_CLAMP_TOPIC = "/xv_sdk/250801DR48FP26003233/clamp/Data"
 
 
 def normalize_quat(q_xyzw):
@@ -189,6 +189,20 @@ def matrix_to_startouch(T):
     q_xyzw = Rotation.from_matrix(T[:3, :3]).as_quat()
     euler = np.asarray(quaternion_to_euler_xyzw(q_xyzw), dtype=float).tolist()
     return pos, euler
+
+
+def qpos_to_euler(qpos):
+    """[x, y, z, qx, qy, qz, qw] -> xyz euler(rad)。"""
+    return Rotation.from_quat(normalize_quat(qpos[3:7])).as_euler("xyz", degrees=False)
+
+
+def matrix_to_euler(T):
+    """4x4 matrix -> xyz euler(rad)。"""
+    return Rotation.from_matrix(T[:3, :3]).as_euler("xyz", degrees=False)
+
+
+def fmt_vec(values, digits=4):
+    return "[" + ",".join(f"{float(v):.{digits}f}" for v in values) + "]"
 
 
 def clamp_to_startouch(raw_value, open_val, closed_val, invert=False):
@@ -464,7 +478,7 @@ def parse_args():
     parser.add_argument("--enable_fd", action="store_true",
                         help="启用 CAN FD")
     parser.add_argument("--base_pose", type=float, nargs=6,
-                        default=[0.3, 0.0, 0.16, 0.0, 0.0, 0.0],
+                        default=[0.32, 0.0, 0.18, 0.0, 0.0, 0.0],
                         metavar=("X", "Y", "Z", "ROLL", "PITCH", "YAW"),
                         help="机械臂 home/base 位姿 [x y z roll pitch yaw]，xyz 米，rpy 度")
     parser.add_argument("--no_home", action="store_true",
@@ -647,9 +661,13 @@ def main():
             else:
                 source_qpos = pose_qpos
 
+            source_T = qpos2mat(source_qpos)
+            source_pos = source_qpos[:3].copy()
+            source_euler = qpos_to_euler(source_qpos)
+
             if args.relative:
                 if source_zero_T is None:
-                    source_zero_T = qpos2mat(source_qpos)
+                    source_zero_T = source_T
                     print(
                         "已用第一帧 pose 定零: "
                         f"stamp={snap['pose_stamp']}, "
@@ -657,7 +675,7 @@ def main():
                     )
                 T_delta = build_relative_delta(
                     source_zero_T,
-                    qpos2mat(source_qpos),
+                    source_T,
                     relative_frame=args.relative_frame,
                 )
                 T_delta = scale_delta_matrix(
@@ -665,8 +683,14 @@ def main():
                     position_scale=args.position_scale,
                     rotation_scale=args.rotation_scale,
                 )
+                control_label = "control_delta"
+                control_pos = T_delta[:3, 3].copy()
+                control_euler = matrix_to_euler(T_delta)
                 robot_T = source_qpos_to_robot_matrix(mat2qpos(T_delta), T_base)
             else:
+                control_label = "control_abs"
+                control_pos = source_pos
+                control_euler = source_euler
                 robot_T = source_qpos_to_robot_matrix(source_qpos, T_base)
 
             robot_T, clipped = maybe_clip_workspace(
@@ -712,12 +736,13 @@ def main():
                         last_gripper_send_time = now
 
             if now - last_log_time >= args.log_period:
+                grip_text = "None" if gripper_cmd is None else f"{gripper_cmd:.4f}"
+                print(f"[seq={snap['pose_seq']}] age={pose_age:.3f}s conf={snap['pose_confidence']}")
+                print(f"  slam_proc pos={fmt_vec(source_pos)} rpy_rad={fmt_vec(source_euler, 5)}")
+                print(f"  {control_label} pos={fmt_vec(control_pos)} rpy_rad={fmt_vec(control_euler, 5)}")
                 print(
-                    f"[seq={snap['pose_seq']}] "
-                    f"pos=[{pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f}] "
-                    f"rpy=[{euler[0]:.5f},{euler[1]:.5f},{euler[2]:.5f}] "
-                    f"grip={None if gripper_cmd is None else round(gripper_cmd, 4)} "
-                    f"conf={snap['pose_confidence']}"
+                    f"  arm_cmd pos={fmt_vec(pos)} rpy_rad={fmt_vec(euler, 5)} "
+                    f"clip={clipped} grip={grip_text}"
                 )
                 last_log_time = now
 
